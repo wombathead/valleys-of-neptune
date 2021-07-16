@@ -7,7 +7,7 @@
   name
   pos
   (vel #(0 0))
-  (heading 0)
+  (heading 0)   ; heading in radians
   engine-thrust ; scalar representing engine power
   thrust        ; vector representing force from engine
   mass

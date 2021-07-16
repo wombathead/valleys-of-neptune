@@ -4,6 +4,8 @@
 (load "planet.lisp")
 (load "ship.lisp")
 
+(load "render.lisp")
+
 (in-package :neptune)
 
 (defparameter *screen-width* 800)
@@ -12,16 +14,16 @@
 (defparameter *camera* #(300 400))
 
 (defparameter *player* (make-ship :name "cherokee mist"
-                                :pos #(200 200)
+                                :pos #(200 100)
                                 :mass 1
                                 :thrust #(0 0)
-                                :engine-thrust 10
+                                :engine-thrust 1000
                                 :size 5))
 
 (defparameter *earth* (make-planet :name "earth"
                                    :pos #(200 300)
-                                   :mass 10; 100000
-                                   :radius 100))
+                                   :mass 100000
+                                   :radius 200))
 
 (defparameter *moon* (make-planet :name "moon"
                                   :pos #(200 100)
@@ -35,34 +37,7 @@
                                     :mass 100
                                     :radius 20))
 
-(defparameter *planets* (list *earth*)); *moon* *europa*))
-
-(defun draw-circle (renderer x y r)
-  "Render a circle of radius R centred at (X,Y) using Bresenham's algorithm"
-  (labels ((radius-error (xi yi r)
-             (abs (+ (* xi xi) (* yi yi) (- (* r r)))))
-
-           (decrement-x-p (xi yi)
-             (plusp (+ (* 2 (+ (* xi xi) (* yi yi) (- (* r r)) (1+ (* 2 yi))))
-                       (- 1 (* 2 xi))))))
-
-    (loop for yi from 0 
-          for xi = r then (if (decrement-x-p xi yi) (1- xi) xi)
-          for points = (mapcar (lambda (p) (list (+ x (first p))
-                                                 (+ y (second p))))
-                               (list
-                                 (list xi yi)
-                                 (list yi xi)
-                                 (list (- yi) xi)
-                                 (list (- xi) yi)
-                                 (list (- xi) (- yi))
-                                 (list (- yi) (- xi))
-                                 (list yi (- xi))
-                                 (list xi (- yi))))   
-          until (< xi yi) do
-          (mapcar (lambda (p)
-                    (sdl2:render-draw-point renderer (first p) (second p)))
-                  points))))
+(defparameter *planets* (list *earth* *moon* *europa*))
 
 (defun world-to-screen (position)
   (let ((coords (vec:subtract position *camera*)))
@@ -71,6 +46,7 @@
 
 (defun update (delta-time-us)
   "Update objects"
+  
   (update-ship *player* *earth* delta-time-us)
 
   (setf *camera* (ship-pos *player*))
@@ -97,14 +73,10 @@
         (floor (+ (vec:vec-x coords) (* 10 (vec:vec-x dir))))
         (floor (+ (vec:vec-y coords) (* 10 (vec:vec-y dir))))))))
 
-(defun render-velocity-vector (renderer ship)
-  (let ((coords (world-to-screen (ship-pos ship))))
-    (sdl2:render-draw-line
-      renderer
-      (floor (vec:vec-x coords))
-      (floor (vec:vec-y coords))
-      (floor (+ (vec:vec-x coords) (ship-vel-x ship)))
-      (floor (+ (vec:vec-y coords) (ship-vel-y ship))))))
+(defun render-ship-velocity-vector (renderer ship)
+  (render-point-vector renderer
+                       (world-to-screen (ship-pos ship))
+                       (ship-vel ship)))
 
 (defun render-ship (renderer ship)
   (let ((coords (world-to-screen (ship-pos ship))))
@@ -113,7 +85,7 @@
                  (floor (vec:vec-y coords))
                  (ship-size ship))
     (render-direction-vector renderer ship)
-    (render-velocity-vector renderer ship)))
+    (render-ship-velocity-vector renderer ship)))
 
 (defun render-direction-to (renderer ship planet)
   (let ((ship-pos (world-to-screen (ship-pos ship)))
@@ -138,27 +110,34 @@
 
   (mapcar (lambda (planet) (render-planet renderer planet)) *planets*)
 
-  ; (render-direction-to renderer *player* *earth*)
+  (render-direction-to renderer *player* *earth*)
   (render-ship renderer *player*)
 
   (sdl2:render-present renderer))
 
-; TODO: make sure thrust is only added when key held down
+(defun keyup-handler (scancode dt)
+  (declare (ignore dt))
+  (cond ((sdl2:scancode= scancode :scancode-escape)
+         (sdl2:push-event :quit))
+        
+        ((sdl2:scancode= scancode :scancode-up)
+         (setf (ship-thrust *player*) #(0 0)))
+
+        ((sdl2:scancode= scancode :scancode-down)
+         (setf (ship-thrust *player*) #(0 0)))))
 
 (defun keydown-handler (scancode dt)
   (cond ((sdl2:scancode= scancode :scancode-up)
          (setf (ship-thrust *player*)
-               (vec:add (ship-thrust *player*)
-                        (vec:scale (polar-to-cart 1 (ship-heading *player*))
-                                   (* (ship-engine-thrust *player*)
-                                      (/ dt 1000000))))))
+               (vec:scale (polar-to-cart 1 (ship-heading *player*))
+                          (* (ship-engine-thrust *player*)
+                             (/ dt 1000000)))))
         
         ((sdl2:scancode= scancode :scancode-down)
          (setf (ship-thrust *player*)
-               (vec:subtract (ship-thrust *player*)
-                             (vec:scale (polar-to-cart 1 (ship-heading *player*))
-                                        (* (ship-engine-thrust *player*)
-                                           (/ dt 1000000))))))
+               (vec:scale (polar-to-cart 1 (- (ship-heading *player*) pi))
+                          (* (ship-engine-thrust *player*)
+                             (/ dt 1000000)))))
 
         ((sdl2:scancode= scancode :scancode-left)
          (setf (ship-vel *player*)
@@ -198,6 +177,8 @@
           (sdl2:with-event-loop (:method :poll)
 
             (:idle ()
+             (format t "Ship heading: ~D~%" (ship-heading *player*))
+
              (setf current-tick-us (get-internal-real-time)
                    delta-time-us (- current-tick-us previous-tick-us)
                    previous-tick-us current-tick-us)
@@ -207,8 +188,7 @@
              (sdl2:delay 16))
 
             (:keyup (:keysym keysym)
-             (when (sdl2:scancode= (sdl2:scancode-value keysym) :scancode-escape)
-               (sdl2:push-event :quit)))
+             (keyup-handler (sdl2:scancode-value keysym) delta-time-us))
 
             (:keydown (:keysym keysym)
              (keydown-handler (sdl2:scancode-value keysym) delta-time-us))
